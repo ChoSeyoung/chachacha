@@ -8,7 +8,7 @@ import * as fs from 'fs';
 export interface VideoSegment {
   imagePath: string;
   audioPath: string;
-  subtitleText: string;
+  subtitles: string[];
   duration: number;
 }
 
@@ -19,11 +19,13 @@ export class VideoService {
   private tempDir: string;
 
   constructor(private configService: ConfigService) {
-    this.fontPath = this.configService.get<string>('FONT_PATH') || 'assets/fonts/JaInan2TTF.ttf';
+    this.fontPath =
+      this.configService.get<string>('FONT_PATH') ||
+      'assets/fonts/JaInan2TTF.ttf';
     this.outputDir = this.configService.get<string>('OUTPUT_DIR') || 'output';
     this.tempDir = this.configService.get<string>('TEMP_DIR') || 'temp';
 
-    [this.outputDir, this.tempDir].forEach(dir => {
+    [this.outputDir, this.tempDir].forEach((dir) => {
       if (!fs.existsSync(dir)) {
         fs.mkdirSync(dir, { recursive: true });
       }
@@ -32,11 +34,40 @@ export class VideoService {
 
   async getAudioDuration(audioPath: string): Promise<number> {
     return new Promise((resolve, reject) => {
-      ffmpeg.ffprobe(audioPath, (err, metadata) => {
+      ffmpeg.ffprobe(audioPath, (err: Error | null, metadata: any) => {
         if (err) reject(err);
         else resolve(metadata.format.duration || 0);
       });
     });
+  }
+
+  private buildSubtitleFilter(
+    subtitles: string[],
+    duration: number,
+  ): string {
+    const timePerSubtitle = duration / subtitles.length;
+    const fontSize = 72;
+
+    const filters: string[] = [
+      'scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920',
+    ];
+
+    subtitles.forEach((subtitle, index) => {
+      const startTime = (index * timePerSubtitle).toFixed(2);
+      const endTime = ((index + 1) * timePerSubtitle - 0.05).toFixed(2);
+
+      const escapedText = subtitle
+        .replace(/\\/g, '\\\\')
+        .replace(/'/g, "\u2019")
+        .replace(/:/g, '\\:')
+        .replace(/%/g, '\\%');
+
+      filters.push(
+        `drawtext=fontfile='${this.fontPath}':text='${escapedText}':fontcolor=white:fontsize=${fontSize}:borderw=4:bordercolor=black:x=(w-text_w)/2:y=(h-text_h)/2:enable='between(t\\,${startTime}\\,${endTime})'`,
+      );
+    });
+
+    return filters.join(',');
   }
 
   async createSegmentVideo(
@@ -44,11 +75,15 @@ export class VideoService {
     index: number,
     baseFilename: string,
   ): Promise<string> {
-    const outputPath = path.join(this.tempDir, `${baseFilename}_part_${index}.mp4`);
+    const outputPath = path.join(
+      this.tempDir,
+      `${baseFilename}_part_${index}.mp4`,
+    );
 
-    const escapedText = segment.subtitleText
-      .replace(/'/g, "'\\''")
-      .replace(/:/g, '\\:');
+    const filterComplex = this.buildSubtitleFilter(
+      segment.subtitles,
+      segment.duration,
+    );
 
     return new Promise((resolve, reject) => {
       ffmpeg()
@@ -56,13 +91,19 @@ export class VideoService {
         .loop(segment.duration)
         .input(segment.audioPath)
         .outputOptions([
-          '-vf', `scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:black,drawtext=fontfile='${this.fontPath}':text='${escapedText}':fontcolor=white:fontsize=48:borderw=3:bordercolor=black:x=(w-text_w)/2:y=h-th-100`,
-          '-c:v', 'libx264',
-          '-preset', 'fast',
-          '-c:a', 'aac',
-          '-b:a', '128k',
+          '-vf',
+          filterComplex,
+          '-c:v',
+          'libx264',
+          '-preset',
+          'fast',
+          '-c:a',
+          'aac',
+          '-b:a',
+          '128k',
           '-shortest',
-          '-pix_fmt', 'yuv420p',
+          '-pix_fmt',
+          'yuv420p',
         ])
         .output(outputPath)
         .on('end', () => resolve(outputPath))
@@ -79,7 +120,7 @@ export class VideoService {
     const outputPath = path.join(this.outputDir, `${outputFilename}.mp4`);
 
     const listContent = videoPaths
-      .map(p => `file '${path.resolve(p)}'`)
+      .map((p) => `file '${path.resolve(p)}'`)
       .join('\n');
     fs.writeFileSync(listFilePath, listContent);
 
@@ -87,9 +128,7 @@ export class VideoService {
       ffmpeg()
         .input(listFilePath)
         .inputOptions(['-f', 'concat', '-safe', '0'])
-        .outputOptions([
-          '-c', 'copy',
-        ])
+        .outputOptions(['-c', 'copy'])
         .output(outputPath)
         .on('end', () => {
           fs.unlinkSync(listFilePath);

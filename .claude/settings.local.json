@@ -3,7 +3,16 @@
     "allow": [
       "Bash(ffmpeg:*)",
       "Bash(npm install:*)",
-      "Bash(npm run build:*)"
+      "Bash(npm run build:*)",
+      "Bash(npx ts-node:*)",
+      "Bash(ffprobe:*)",
+      "Bash(open:*)",
+      "mcp__context7__resolve-library-id",
+      "mcp__context7__get-library-docs",
+      "Bash(cat:*)",
+      "Bash(node:*)",
+      "Bash(git add:*)",
+      "Bash(git commit -m \"$(cat <<''EOF''\n영상 레이아웃 여백 조정 및 제목 표시 개선\n\n- 상단 여백(제목 영역): 420px → 630px\n- 하단 여백: 420px → 210px\n- 제목이 항상 두 줄로 표시되도록 개선\n- 제목을 상단 영역 중앙에 배치\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\nCo-Authored-By: Claude <noreply@anthropic.com>\nEOF\n)\")"
     ],
     "deny": [],
     "ask": []
