@@ -1,9 +1,9 @@
 {
   "permissions": {
     "allow": [
-      "Bash(gh auth:*)",
-      "Bash(git add:*)",
-      "Bash(git commit -m \"$(cat <<''EOF''\nInitial commit: NestJS project setup\n\n- Configure NestJS application structure\n- Add TypeScript configuration\n- Set up ESLint and Prettier\n- Include basic test setup\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\nCo-Authored-By: Claude <noreply@anthropic.com>\nEOF\n)\")"
+      "Bash(ffmpeg:*)",
+      "Bash(npm install:*)",
+      "Bash(npm run build:*)"
     ],
     "deny": [],
     "ask": []
