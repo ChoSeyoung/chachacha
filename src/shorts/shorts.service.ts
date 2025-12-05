@@ -50,7 +50,7 @@ export class ShortsService {
     const vehicleDir = path.join(this.vehiclesDir, vehicleName);
     if (!fs.existsSync(vehicleDir)) return [];
 
-    const extensions = ['.jpg', '.jpeg', '.png', '.webp'];
+    const extensions = ['.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp', '.heic', '.avif'];
     return fs
       .readdirSync(vehicleDir)
       .filter((f) => extensions.includes(path.extname(f).toLowerCase()))
