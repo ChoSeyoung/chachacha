@@ -33,6 +33,7 @@ interface ShortsVideoProps {
   title?: string;
   fontUrl?: string;
   imageIntervalSeconds?: number;
+  isPreview?: boolean;  // 프리뷰 모드 (무음)
   [key: string]: unknown;
 }
 
@@ -53,6 +54,7 @@ export const ShortsVideo: React.FC<ShortsVideoProps> = ({
   title = '',
   fontUrl,
   imageIntervalSeconds = 3,
+  isPreview = false,
 }) => {
   const { fps } = useVideoConfig();
 
@@ -82,6 +84,9 @@ export const ShortsVideo: React.FC<ShortsVideoProps> = ({
   // 세그먼트별 이미지 슬라이드 생성
   const imageSlides: { startFrame: number; durationInFrames: number; src: string }[] = [];
 
+  // 전체 영상에서 이미지 인덱스를 유지 (세그먼트마다 리셋하지 않음)
+  let globalImageIndex = 0;
+
   for (const segment of audioSegments) {
     const segmentImages = segment.images && segment.images.length > 0
       ? segment.images
@@ -90,7 +95,6 @@ export const ShortsVideo: React.FC<ShortsVideoProps> = ({
     if (segmentImages.length === 0) continue;
 
     let currentFrame = segment.startFrame;
-    let imageIndex = 0;
     const segmentEndFrame = segment.startFrame + segment.durationInFrames;
 
     while (currentFrame < segmentEndFrame) {
@@ -100,11 +104,11 @@ export const ShortsVideo: React.FC<ShortsVideoProps> = ({
       imageSlides.push({
         startFrame: currentFrame,
         durationInFrames: slideDuration,
-        src: segmentImages[imageIndex % segmentImages.length],
+        src: segmentImages[globalImageIndex % segmentImages.length],
       });
 
       currentFrame += slideDuration;
-      imageIndex++;
+      globalImageIndex++;
     }
   }
 
@@ -215,6 +219,7 @@ export const ShortsVideo: React.FC<ShortsVideoProps> = ({
         {/* 자막 (이미지 영역 내 하단) */}
         {audioSegments.map((segment, segmentIndex) => {
           const framesPerSubtitle = Math.floor(segment.durationInFrames / segment.subtitles.length);
+          const subtitleOffsetFrames = Math.floor(0.5 * fps); // 자막을 0.5초 빨리 표시
 
           return (
             <Sequence
@@ -223,8 +228,8 @@ export const ShortsVideo: React.FC<ShortsVideoProps> = ({
               durationInFrames={segment.durationInFrames}
             >
               {segment.subtitles.map((subtitle, subtitleIndex) => {
-                const subtitleStart = subtitleIndex * framesPerSubtitle;
-                const subtitleEnd = (subtitleIndex + 1) * framesPerSubtitle;
+                const subtitleStart = Math.max(0, subtitleIndex * framesPerSubtitle - subtitleOffsetFrames);
+                const subtitleEnd = (subtitleIndex + 1) * framesPerSubtitle - subtitleOffsetFrames;
 
                 return (
                   <Subtitle
@@ -253,15 +258,17 @@ export const ShortsVideo: React.FC<ShortsVideoProps> = ({
         }}
       />
 
-      {/* 오디오 레이어 */}
-      {audioSegments.map((segment, segmentIndex) => (
-        <Sequence
-          key={`audio-${segmentIndex}`}
-          from={segment.startFrame}
-          durationInFrames={segment.durationInFrames}
-        >
-          <Audio src={segment.audioPath} />
-        </Sequence>
+      {/* 오디오 레이어 (프리뷰 모드에서는 생략) */}
+      {!isPreview && audioSegments.map((segment, segmentIndex) => (
+        segment.audioPath && (
+          <Sequence
+            key={`audio-${segmentIndex}`}
+            from={segment.startFrame}
+            durationInFrames={segment.durationInFrames}
+          >
+            <Audio src={segment.audioPath} />
+          </Sequence>
+        )
       ))}
     </AbsoluteFill>
   );

@@ -1,33 +1,45 @@
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 import { ShortsService } from './shorts/shorts.service';
+import * as fs from 'fs';
+import * as path from 'path';
+
+// 디렉토리에서 이미지 파일들을 읽어오는 함수
+function getImagesFromDir(dirPath: string): string[] {
+  if (!fs.existsSync(dirPath)) return [];
+  const files = fs.readdirSync(dirPath);
+  const imageExtensions = ['.jpg', '.jpeg', '.png', '.webp'];
+  return files
+    .filter(file => imageExtensions.includes(path.extname(file).toLowerCase()))
+    .sort()
+    .map(file => path.join(dirPath, file));
+}
 
 async function bootstrap() {
   const app = await NestFactory.createApplicationContext(AppModule);
   const shortsService = app.get(ShortsService);
 
-  const ev6Images = [
-    'assets/vehicles/kia_ev6/9xko580pqody8bhrqbw4.jpg',
-    'assets/vehicles/kia_ev6/cdb0g1hbc94aecv5a3ie.jpg',
-    'assets/vehicles/kia_ev6/emz9b2pnaozrigyo0ofs.jpg',
+  // 디렉토리에서 이미지 자동 로드
+  const imageDirs = [
+    'assets/vehicles/hyundai_ioniq9',
   ];
 
-  const ioniq6Images = [
-    'assets/vehicles/hyundai_ioniq6/751e6151dddfe0fc346ade47ad74e29f.jpg',
-    'assets/vehicles/hyundai_ioniq6/5c128e1e34f169c09c1e33eaa90046dd.jpg',
-    'assets/vehicles/hyundai_ioniq6/3df833c83a1dd12a81c2b9583ebaadb8.jpg',
-  ];
-
-  const images = [...ev6Images, ...ioniq6Images];
+  // 전체 이미지 조합
+  const images = imageDirs.flatMap(dir => getImagesFromDir(dir));
 
   console.log('Creating shorts video...');
-  console.log('Images:', images);
+  console.log('Topic: 아이오닉9, 이 가격 실화야?');
+  console.log('Images:', images.length, '개');
 
   const result = await shortsService.createShorts({
-    topic: 'EV6 vs 아이오닉6 전기차 비교! 어떤 차가 더 좋을까?',
+    topic: '아이오닉9 가격 공개! 6715만원부터 7941만원까지! 대형 전기 SUV인데 이 가격 실화야? 532km 주행거리에 초고속 충전, 6인승 7인승까지! 경쟁차 대비 가성비 어떤지 팩트체크 해볼게!',
     images,
-    projectName: 'EV6_vs_아이오닉6_비교',
+    projectName: '아이오닉9_가격_실화야',
     maxDuration: 60,
+    segmentCount: 5,
+    imageIntervalSeconds: 2.5,
+    titleMain: '아이오닉9',
+    titleSub: '이 가격 실화야?',
   });
 
   console.log('\n✅ 완료!');

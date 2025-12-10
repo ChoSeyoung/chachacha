@@ -13,6 +13,12 @@ export interface RenderSegment {
   images?: string[];  // 이 세그먼트에서 사용할 이미지들
 }
 
+export interface PreviewSegment {
+  subtitles: string[];
+  durationInSeconds: number;
+  images?: string[];
+}
+
 export interface RenderRequest {
   segments: RenderSegment[];
   images: string[];  // 기본 이미지 (세그먼트별 이미지가 없을 때 사용)
@@ -22,6 +28,16 @@ export interface RenderRequest {
   titleSub?: string;     // 서브 제목 (노란색)
   fontPath?: string;
   imageIntervalSeconds?: number;  // 이미지 전환 간격 (기본 3초)
+}
+
+export interface PreviewRequest {
+  segments: PreviewSegment[];
+  images: string[];
+  outputPath: string;
+  titleMain?: string;
+  titleSub?: string;
+  fontPath?: string;
+  imageIntervalSeconds?: number;
 }
 
 @Injectable()
@@ -223,6 +239,100 @@ export class RemotionRenderService {
       return outputPath;
     } finally {
       // 에셋 서버 종료
+      this.stopAssetServer();
+    }
+  }
+
+  async renderPreview(request: PreviewRequest): Promise<string> {
+    const {
+      segments,
+      images,
+      outputPath,
+      titleMain = '',
+      titleSub = '',
+      fontPath,
+      imageIntervalSeconds = 3
+    } = request;
+
+    // 에셋 서버 시작
+    const port = await this.startAssetServer();
+
+    try {
+      // 세그먼트 데이터를 Remotion props 형식으로 변환 (오디오 없음)
+      const remotionSegments = segments.map((segment) => ({
+        audioPath: '', // 프리뷰 모드: 오디오 없음
+        subtitles: segment.subtitles,
+        durationInFrames: Math.ceil(segment.durationInSeconds * this.fps),
+        images: segment.images?.map((img) => this.pathToUrl(img, port)) || [],
+      }));
+
+      // 기본 이미지 URL 변환
+      const imageUrls = images.map((img) => this.pathToUrl(img, port));
+
+      // 폰트 URL 생성
+      const fontUrl = fontPath ? this.pathToUrl(fontPath, port) : undefined;
+
+      // 총 프레임 수 계산
+      const totalDurationInFrames = remotionSegments.reduce(
+        (sum, seg) => sum + seg.durationInFrames,
+        0
+      );
+
+      this.logger.log(`[Preview] Total duration: ${totalDurationInFrames} frames (${totalDurationInFrames / this.fps}s)`);
+      this.logger.log(`[Preview] No audio - silent preview mode`);
+
+      // 번들링
+      const bundleLocation = await this.ensureBundled();
+
+      // 컴포지션 선택
+      const composition = await selectComposition({
+        serveUrl: bundleLocation,
+        id: 'ShortsVideo',
+        inputProps: {
+          segments: remotionSegments,
+          images: imageUrls,
+          titleMain,
+          titleSub,
+          fontUrl,
+          imageIntervalSeconds,
+          isPreview: true, // 프리뷰 모드 플래그
+        },
+      });
+
+      // 동적으로 duration 설정
+      const compositionWithDuration = {
+        ...composition,
+        durationInFrames: totalDurationInFrames,
+      };
+
+      // 출력 디렉토리 확인
+      const outputDir = path.dirname(outputPath);
+      if (!fs.existsSync(outputDir)) {
+        fs.mkdirSync(outputDir, { recursive: true });
+      }
+
+      this.logger.log(`[Preview] Rendering to: ${outputPath}`);
+
+      // 렌더링 (무음)
+      await renderMedia({
+        composition: compositionWithDuration,
+        serveUrl: bundleLocation,
+        codec: 'h264',
+        outputLocation: outputPath,
+        inputProps: {
+          segments: remotionSegments,
+          images: imageUrls,
+          titleMain,
+          titleSub,
+          fontUrl,
+          imageIntervalSeconds,
+          isPreview: true,
+        },
+      });
+
+      this.logger.log('[Preview] Rendering complete');
+      return outputPath;
+    } finally {
       this.stopAssetServer();
     }
   }

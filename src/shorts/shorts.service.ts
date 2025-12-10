@@ -2,7 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { ContentService, ScriptResult } from '../content/content.service';
 import { TtsService } from '../tts/tts.service';
-import { RemotionRenderService, RenderSegment } from '../remotion/render.service';
+import { RemotionRenderService, RenderSegment, PreviewSegment } from '../remotion/render.service';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -15,12 +15,20 @@ export interface ShortsRequest {
   fontPath?: string;
   segmentCount?: number;  // 스크립트 세그먼트 수 (기본 3)
   imageIntervalSeconds?: number;  // 이미지 전환 간격 (기본 3초)
+  titleMain?: string;  // 메인 제목 (흰색) - 직접 지정
+  titleSub?: string;   // 서브 제목 (노란색) - 직접 지정
 }
 
 export interface ShortsResult {
   videoPath: string;
   projectPath: string;
   title: string;
+  script: ScriptResult;
+}
+
+export interface ScriptOnlyResult {
+  projectPath: string;
+  scriptPath: string;
   script: ScriptResult;
 }
 
@@ -112,6 +120,220 @@ export class ShortsService {
     }
   }
 
+  /**
+   * 스크립트만 생성하고 저장 (검토용)
+   */
+  async generateScriptOnly(request: ShortsRequest): Promise<ScriptOnlyResult> {
+    const {
+      topic,
+      projectName,
+      maxDuration = 60,
+      segmentCount = 3,
+    } = request;
+
+    const projectDir = this.createProjectFolder(projectName || topic);
+    this.logger.log(`Project folder: ${projectDir}`);
+
+    // 스크립트 생성
+    this.logger.log(`Generating script for: ${topic}`);
+    const script = await this.contentService.generateScript(
+      topic,
+      segmentCount,
+      maxDuration,
+    );
+    this.logger.log(`Script generated: ${script.title}`);
+
+    const scriptPath = path.join(projectDir, 'script.json');
+    fs.writeFileSync(
+      scriptPath,
+      JSON.stringify(script, null, 2),
+      'utf-8',
+    );
+
+    this.logger.log(`Script saved to: ${scriptPath}`);
+
+    return {
+      projectPath: projectDir,
+      scriptPath,
+      script,
+    };
+  }
+
+  /**
+   * 기존 스크립트를 사용하여 영상 렌더링
+   */
+  async renderFromScript(
+    projectPath: string,
+    images: string[],
+    options?: {
+      imagesByVehicle?: Record<string, string[]>;
+      fontPath?: string;
+      imageIntervalSeconds?: number;
+      titleMain?: string;
+      titleSub?: string;
+    }
+  ): Promise<ShortsResult> {
+    const {
+      imagesByVehicle,
+      fontPath,
+      imageIntervalSeconds = 3,
+      titleMain: requestTitleMain,
+      titleSub: requestTitleSub,
+    } = options || {};
+
+    const scriptPath = path.join(projectPath, 'script.json');
+    if (!fs.existsSync(scriptPath)) {
+      throw new Error(`Script not found: ${scriptPath}`);
+    }
+
+    const script: ScriptResult = JSON.parse(fs.readFileSync(scriptPath, 'utf-8'));
+    this.logger.log(`Loaded script from: ${scriptPath}`);
+
+    // 폰트 경로 결정
+    const resolvedFontPath = fontPath || this.defaultFontPath;
+    const fontExists = fs.existsSync(resolvedFontPath);
+    const timestamp = Date.now().toString();
+
+    // TTS 오디오 생성
+    this.logger.log(`[1/3] Generating TTS audio...`);
+    const audioPaths = await this.ttsService.generateSegmentAudios(
+      script.segments,
+      timestamp,
+    );
+    this.logger.log(`Generated ${audioPaths.length} audio segments`);
+
+    // 렌더링 세그먼트 준비
+    this.logger.log(`[2/3] Preparing render segments...`);
+    const renderSegments: RenderSegment[] = [];
+
+    for (let i = 0; i < audioPaths.length; i++) {
+      const duration = await this.getAudioDuration(audioPaths[i]);
+      let segmentImages: string[] | undefined;
+      const carType = script.segments[i].car;
+
+      if (imagesByVehicle && carType && carType !== 'both') {
+        segmentImages = imagesByVehicle[carType];
+        if (segmentImages && segmentImages.length > 0) {
+          this.logger.log(`Segment ${i + 1}: Using ${carType} images (${segmentImages.length}개)`);
+        }
+      }
+
+      renderSegments.push({
+        audioPath: audioPaths[i],
+        subtitles: script.segments[i].subtitles || [script.segments[i].text],
+        durationInSeconds: duration,
+        images: segmentImages?.map((img) => path.resolve(img)),
+      });
+
+      this.logger.log(`Segment ${i + 1}/${audioPaths.length} prepared (${duration.toFixed(2)}s, car: ${carType || 'both'})`);
+    }
+
+    // Remotion으로 렌더링
+    this.logger.log(`[3/3] Rendering video with Remotion...`);
+    this.logger.log(`Images: ${images.length}개 (${imageIntervalSeconds}초 간격 순환)`);
+    if (fontExists) {
+      this.logger.log(`Using font: ${resolvedFontPath}`);
+    }
+    const outputPath = path.join(projectPath, 'shorts.mp4');
+
+    const finalTitleMain = requestTitleMain || script.titleMain;
+    const finalTitleSub = requestTitleSub || script.titleSub;
+
+    await this.remotionRenderService.render({
+      segments: renderSegments,
+      images: images.map((img) => path.resolve(img)),
+      outputPath,
+      title: script.title,
+      titleMain: finalTitleMain,
+      titleSub: finalTitleSub,
+      fontPath: fontExists ? path.resolve(resolvedFontPath) : undefined,
+      imageIntervalSeconds,
+    });
+
+    // 임시 파일 정리
+    this.logger.log(`Cleaning up temp files...`);
+    this.cleanupTempFiles(timestamp);
+
+    this.logger.log(`Video created: ${outputPath}`);
+
+    return {
+      videoPath: outputPath,
+      projectPath,
+      title: script.title,
+      script,
+    };
+  }
+
+  /**
+   * 프리뷰 영상 생성 (TTS 없음, 무음)
+   * script.json의 duration 필드를 사용하여 타이밍 결정
+   */
+  async previewFromScript(
+    projectPath: string,
+    images: string[],
+    options?: {
+      fontPath?: string;
+      imageIntervalSeconds?: number;
+      titleMain?: string;
+      titleSub?: string;
+    }
+  ): Promise<{ previewPath: string; script: ScriptResult }> {
+    const {
+      fontPath,
+      imageIntervalSeconds = 3,
+      titleMain: requestTitleMain,
+      titleSub: requestTitleSub,
+    } = options || {};
+
+    const scriptPath = path.join(projectPath, 'script.json');
+    if (!fs.existsSync(scriptPath)) {
+      throw new Error(`Script not found: ${scriptPath}`);
+    }
+
+    const script: ScriptResult = JSON.parse(fs.readFileSync(scriptPath, 'utf-8'));
+    this.logger.log(`[Preview] Loaded script from: ${scriptPath}`);
+
+    // 폰트 경로 결정
+    const resolvedFontPath = fontPath || this.defaultFontPath;
+    const fontExists = fs.existsSync(resolvedFontPath);
+
+    // 프리뷰 세그먼트 준비 (TTS 없이 duration 필드 사용)
+    this.logger.log(`[Preview] Preparing segments (no TTS)...`);
+    const previewSegments: PreviewSegment[] = script.segments.map((segment, i) => {
+      const duration = segment.duration || 5; // 기본 5초
+      this.logger.log(`Segment ${i + 1}: ${duration}s`);
+      return {
+        subtitles: segment.subtitles || [segment.text],
+        durationInSeconds: duration,
+      };
+    });
+
+    // Remotion으로 프리뷰 렌더링
+    this.logger.log(`[Preview] Rendering silent preview...`);
+    this.logger.log(`Images: ${images.length}개 (${imageIntervalSeconds}초 간격)`);
+    const outputPath = path.join(projectPath, 'preview.mp4');
+
+    const finalTitleMain = requestTitleMain || script.titleMain;
+    const finalTitleSub = requestTitleSub || script.titleSub;
+
+    await this.remotionRenderService.renderPreview({
+      segments: previewSegments,
+      images: images.map((img) => path.resolve(img)),
+      outputPath,
+      titleMain: finalTitleMain,
+      titleSub: finalTitleSub,
+      fontPath: fontExists ? path.resolve(resolvedFontPath) : undefined,
+      imageIntervalSeconds,
+    });
+
+    this.logger.log(`[Preview] Created: ${outputPath}`);
+
+    return {
+      previewPath: outputPath,
+      script,
+    };
+  }
+
   async createShorts(request: ShortsRequest): Promise<ShortsResult> {
     const {
       topic,
@@ -122,6 +344,8 @@ export class ShortsService {
       fontPath,
       segmentCount = 3,
       imageIntervalSeconds = 3,
+      titleMain: requestTitleMain,
+      titleSub: requestTitleSub,
     } = request;
 
     // 폰트 경로 결정 (지정된 것 또는 기본값)
@@ -194,13 +418,17 @@ export class ShortsService {
     }
     const outputPath = path.join(projectDir, 'shorts.mp4');
 
+    // 제목: request에서 직접 지정한 값 우선, 없으면 script에서 가져옴
+    const finalTitleMain = requestTitleMain || script.titleMain;
+    const finalTitleSub = requestTitleSub || script.titleSub;
+
     await this.remotionRenderService.render({
       segments: renderSegments,
       images: images.map((img) => path.resolve(img)),
       outputPath,
       title: script.title,
-      titleMain: script.titleMain,
-      titleSub: script.titleSub,
+      titleMain: finalTitleMain,
+      titleSub: finalTitleSub,
       fontPath: fontExists ? path.resolve(resolvedFontPath) : undefined,
       imageIntervalSeconds,
     });
